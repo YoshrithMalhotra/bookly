@@ -1,0 +1,19 @@
+-- 001_init.sql — YOU write this one. Runs automatically the first time
+-- Postgres starts (see docker-compose.yml). Use `make db-reset` to re-run.
+--
+-- Tables to create:
+--   businesses          id, name, slug (unique), timezone, google_review_url,
+--                       owner_email (unique), password_hash, created_at
+--   services            id, business_id -> businesses, name, duration_min, price
+--   opening_hours       business_id -> businesses, weekday, opens_at, closes_at
+--   appointments        id, business_id, service_id, customer_name, customer_phone,
+--                       starts_at, ends_at (TIMESTAMPTZ), status, whatsapp_opt_in, created_at
+--   scheduled_messages  id, appointment_id -> appointments, type, send_at, status,
+--                       attempts, last_error, sent_at
+--
+-- Think about:
+--   - NOT NULL and CHECK constraints (duration_min > 0, ends_at > starts_at, valid statuses)
+--   - ON DELETE behavior for each foreign key
+--   - Double booking: EXCLUDE USING gist (needs CREATE EXTENSION btree_gist)
+--   - Sending twice: UNIQUE (appointment_id, type)
+--   - Indexes the worker needs: it queries pending messages by send_at
