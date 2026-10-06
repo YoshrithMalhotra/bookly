@@ -6,10 +6,13 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/YoshrithMalhotra/bookly/internal/config"
+	"github.com/YoshrithMalhotra/bookly/internal/logging"
 	"github.com/YoshrithMalhotra/bookly/internal/notify"
+	"github.com/YoshrithMalhotra/bookly/internal/store"
+	"github.com/YoshrithMalhotra/bookly/internal/worker"
+	"github.com/YoshrithMalhotra/bookly/migrations"
 )
 
 func main() {
@@ -18,32 +21,42 @@ func main() {
 		slog.Error("config", "error", err)
 		os.Exit(1)
 	}
+	logging.Setup(cfg.Env)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	db, err := store.New(ctx, cfg.DatabaseURL)
+	if err != nil {
+		slog.Error("db", "error", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+	if err := db.Migrate(ctx, migrations.FS); err != nil {
+		slog.Error("migrate", "error", err)
+		os.Exit(1)
+	}
+
 	var sender notify.Sender = notify.FakeSender{}
-
-	ticker := time.NewTicker(cfg.WorkerInterval)
-	defer ticker.Stop()
-
-	slog.Info("worker started", "interval", cfg.WorkerInterval)
-	for {
-		select {
-		case <-ctx.Done():
-			slog.Info("worker stopped")
-			return
-		case <-ticker.C:
-			sendDue(ctx, sender)
+	if cfg.TwilioAccountSID != "" {
+		sender = &notify.TwilioSender{
+			AccountSID: cfg.TwilioAccountSID,
+			AuthToken:  cfg.TwilioAuthToken,
+			From:       cfg.TwilioWhatsAppFrom,
+			ContentSIDs: map[string]string{
+				"reminder": cfg.TwilioReminderContentSID,
+				"review":   cfg.TwilioReviewContentSID,
+			},
+		}
+		slog.Info("using Twilio WhatsApp sender", "from", cfg.TwilioWhatsAppFrom)
+	} else {
+		if cfg.Env == "prod" {
+			slog.Warn("TWILIO_ACCOUNT_SID not set: messages are only logged, not sent")
 		}
 	}
-}
 
-// sendDue is the heart of the product.
-// TODO(week 2):
-//  1. SELECT due pending messages ... FOR UPDATE SKIP LOCKED LIMIT n
-//  2. Skip/cancel if the appointment was cancelled (and for reviews, isn't 'done')
-//  3. sender.Send, then mark sent — or record the error and retry later
-func sendDue(ctx context.Context, sender notify.Sender) {
-	_ = sender
+	w := &worker.Worker{Store: db, Sender: sender, PublicURL: cfg.PublicURL}
+	slog.Info("worker started", "interval", cfg.WorkerInterval)
+	w.Run(ctx, cfg.WorkerInterval)
+	slog.Info("worker stopped")
 }

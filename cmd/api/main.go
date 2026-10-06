@@ -1,33 +1,76 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
+	"github.com/YoshrithMalhotra/bookly/internal/api"
 	"github.com/YoshrithMalhotra/bookly/internal/config"
+	"github.com/YoshrithMalhotra/bookly/internal/logging"
+	"github.com/YoshrithMalhotra/bookly/internal/store"
+	"github.com/YoshrithMalhotra/bookly/migrations"
 )
 
 func main() {
+	if err := run(); err != nil {
+		slog.Error("api", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	cfg, err := config.Load()
 	if err != nil {
-		slog.Error("config", "error", err)
-		os.Exit(1)
+		return err
+	}
+	logging.Setup(cfg.Env)
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	db, err := store.New(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	// Safe with several instances starting at once: Migrate takes a lock.
+	if err := db.Migrate(ctx, migrations.FS); err != nil {
+		return err
 	}
 
-	// TODO(week 1): connect to Postgres via internal/store.
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("OK"))
-	})
-	// TODO(week 1): GET  /businesses/{slug}/slots?date=YYYY-MM-DD
-	// TODO(week 1): POST /businesses/{slug}/appointments
-
-	// TODO: server timeouts + graceful shutdown (copy the pattern from Governor's main.go).
-	slog.Info("api listening", "port", cfg.Port)
-	if err := http.ListenAndServe(":"+cfg.Port, mux); err != nil {
-		slog.Error("server", "error", err)
-		os.Exit(1)
+	srv := &http.Server{
+		Addr:              ":" + cfg.Port,
+		Handler:           api.New(db, cfg).Handler(),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
+
+	errc := make(chan error, 1)
+	go func() {
+		slog.Info("api listening", "port", cfg.Port, "env", cfg.Env)
+		errc <- srv.ListenAndServe()
+	}()
+
+	select {
+	case err := <-errc:
+		if !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+	case <-ctx.Done():
+		slog.Info("shutting down")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			return err
+		}
+	}
+	return nil
 }
