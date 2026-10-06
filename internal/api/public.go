@@ -1,12 +1,17 @@
 package api
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/YoshrithMalhotra/bookly/internal/booking"
 	"github.com/YoshrithMalhotra/bookly/internal/store"
 )
+
+// errNotAccepting means the business's trial ended without a subscription.
+var errNotAccepting = errors.New("this business isn't taking online bookings right now")
 
 type hoursJSON struct {
 	Weekday int    `json:"weekday"` // 0 = Sunday
@@ -39,12 +44,13 @@ func (s *Server) getPublicBusiness(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"name":           b.Name,
-		"slug":           b.Slug,
-		"timezone":       b.Timezone,
-		"services":       services,
-		"hours":          toHoursJSON(hours),
-		"max_days_ahead": booking.MaxDaysAhead,
+		"name":               b.Name,
+		"slug":               b.Slug,
+		"timezone":           b.Timezone,
+		"services":           services,
+		"hours":              toHoursJSON(hours),
+		"max_days_ahead":     booking.MaxDaysAhead,
+		"accepting_bookings": s.accepting(b),
 	})
 }
 
@@ -53,6 +59,9 @@ func (s *Server) bookingContext(r *http.Request, slug string, serviceID int64) (
 	b, err := s.store.BusinessBySlug(r.Context(), slug)
 	if err != nil {
 		return b, store.Service{}, nil, nil, err
+	}
+	if !s.accepting(b) {
+		return b, store.Service{}, nil, nil, errNotAccepting
 	}
 	svc, err := s.store.Service(r.Context(), b.ID, serviceID)
 	if err != nil {
@@ -142,6 +151,10 @@ func (s *Server) createAppointment(w http.ResponseWriter, r *http.Request) {
 		handleErr(w, r, err)
 		return
 	}
+	s.sendEmail(b.OwnerEmail, "New booking: "+req.CustomerName+", "+req.StartsAt.In(loc).Format("Mon 2 Jan 15:04"),
+		fmt.Sprintf("%s booked %s on %s.\nPhone: %s\n\nSee your day: %s/owner\n",
+			req.CustomerName, svc.Name, req.StartsAt.In(loc).Format("Monday 2 January at 15:04"),
+			req.CustomerPhone, s.cfg.PublicURL))
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"appointment": store.AppointmentView{
 			ID: id, ServiceID: svc.ID, ServiceName: svc.Name,
@@ -170,9 +183,19 @@ func (s *Server) getManagedAppointment(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) cancelManagedAppointment(w http.ResponseWriter, r *http.Request) {
+	a, b, err := s.store.AppointmentByToken(r.Context(), r.PathValue("token"))
+	if err != nil {
+		handleErr(w, r, err)
+		return
+	}
 	if err := s.store.CancelByToken(r.Context(), r.PathValue("token"), s.now()); err != nil {
 		handleErr(w, r, err)
 		return
+	}
+	if loc, err := time.LoadLocation(b.Timezone); err == nil {
+		when := a.StartsAt.In(loc).Format("Monday 2 January at 15:04")
+		s.sendEmail(b.OwnerEmail, "Cancelled: "+a.CustomerName+", "+a.StartsAt.In(loc).Format("Mon 2 Jan 15:04"),
+			fmt.Sprintf("%s cancelled their %s on %s. The slot is free again.\n", a.CustomerName, a.ServiceName, when))
 	}
 	s.getManagedAppointment(w, r)
 }

@@ -34,7 +34,29 @@ type Config struct {
 	TwilioWhatsAppFrom       string // e.g. +14155238886
 	TwilioReminderContentSID string // approved template for reminders (optional)
 	TwilioReviewContentSID   string // approved template for review requests (optional)
+
+	// Stripe subscriptions. When StripeSecretKey is empty billing is off
+	// and every business can take bookings.
+	StripeSecretKey     string
+	StripeWebhookSecret string
+	StripePriceID       string // recurring price owners subscribe to
+	TrialDays           int
+	PriceLabel          string // shown on the site, e.g. "£19 / month"
+
+	// Email over SMTP. When SMTPHost is empty emails are only logged.
+	SMTPHost     string
+	SMTPPort     string
+	SMTPUsername string
+	SMTPPassword string
+	EmailFrom    string
+
+	// Shown on the legal pages and in emails.
+	CompanyName  string
+	SupportEmail string
 }
+
+// BillingEnabled reports whether Stripe is configured.
+func (c Config) BillingEnabled() bool { return c.StripeSecretKey != "" }
 
 func Load() (Config, error) {
 	cfg := Config{
@@ -49,6 +71,17 @@ func Load() (Config, error) {
 		TwilioWhatsAppFrom:       os.Getenv("TWILIO_WHATSAPP_FROM"),
 		TwilioReminderContentSID: os.Getenv("TWILIO_REMINDER_CONTENT_SID"),
 		TwilioReviewContentSID:   os.Getenv("TWILIO_REVIEW_CONTENT_SID"),
+		StripeSecretKey:          os.Getenv("STRIPE_SECRET_KEY"),
+		StripeWebhookSecret:      os.Getenv("STRIPE_WEBHOOK_SECRET"),
+		StripePriceID:            os.Getenv("STRIPE_PRICE_ID"),
+		PriceLabel:               os.Getenv("PRICE_LABEL"),
+		SMTPHost:                 os.Getenv("SMTP_HOST"),
+		SMTPPort:                 getenv("SMTP_PORT", "587"),
+		SMTPUsername:             os.Getenv("SMTP_USERNAME"),
+		SMTPPassword:             os.Getenv("SMTP_PASSWORD"),
+		EmailFrom:                os.Getenv("EMAIL_FROM"),
+		CompanyName:              getenv("COMPANY_NAME", "Bookly"),
+		SupportEmail:             os.Getenv("SUPPORT_EMAIL"),
 	}
 	if cfg.Env != "dev" && cfg.Env != "prod" {
 		return Config{}, fmt.Errorf("APP_ENV must be dev or prod, got %q", cfg.Env)
@@ -84,6 +117,19 @@ func Load() (Config, error) {
 
 	if cfg.TwilioAccountSID != "" && (cfg.TwilioAuthToken == "" || cfg.TwilioWhatsAppFrom == "") {
 		return Config{}, fmt.Errorf("TWILIO_AUTH_TOKEN and TWILIO_WHATSAPP_FROM are required with TWILIO_ACCOUNT_SID")
+	}
+
+	if cfg.StripeSecretKey != "" && (cfg.StripeWebhookSecret == "" || cfg.StripePriceID == "") {
+		return Config{}, fmt.Errorf("STRIPE_WEBHOOK_SECRET and STRIPE_PRICE_ID are required with STRIPE_SECRET_KEY")
+	}
+	trial, err := strconv.Atoi(getenv("TRIAL_DAYS", "14"))
+	if err != nil || trial < 0 || trial > 365 {
+		return Config{}, fmt.Errorf("TRIAL_DAYS must be 0–365")
+	}
+	cfg.TrialDays = trial
+
+	if cfg.SMTPHost != "" && cfg.EmailFrom == "" {
+		return Config{}, fmt.Errorf("EMAIL_FROM is required with SMTP_HOST")
 	}
 
 	return cfg, nil

@@ -12,25 +12,40 @@ import (
 	"strings"
 	"time"
 
+	"github.com/YoshrithMalhotra/bookly/internal/billing"
 	"github.com/YoshrithMalhotra/bookly/internal/booking"
 	"github.com/YoshrithMalhotra/bookly/internal/config"
+	"github.com/YoshrithMalhotra/bookly/internal/email"
 	"github.com/YoshrithMalhotra/bookly/internal/store"
 )
 
 type Server struct {
-	store *store.Store
-	cfg   config.Config
-	now   func() time.Time
+	store  *store.Store
+	cfg    config.Config
+	now    func() time.Time
+	mailer email.Sender
+	stripe *billing.Stripe // nil when billing is off
 
 	bookingLimit *rateLimiter
 	authLimit    *rateLimiter
 }
 
 func New(s *store.Store, cfg config.Config) *Server {
+	var mailer email.Sender = email.FakeSender{}
+	if cfg.SMTPHost != "" {
+		mailer = &email.SMTPSender{Host: cfg.SMTPHost, Port: cfg.SMTPPort,
+			Username: cfg.SMTPUsername, Password: cfg.SMTPPassword, From: cfg.EmailFrom}
+	}
+	var stripe *billing.Stripe
+	if cfg.BillingEnabled() {
+		stripe = &billing.Stripe{SecretKey: cfg.StripeSecretKey}
+	}
 	return &Server{
 		store:        s,
 		cfg:          cfg,
 		now:          time.Now,
+		mailer:       mailer,
+		stripe:       stripe,
 		bookingLimit: newRateLimiter(10, time.Minute), // per IP
 		authLimit:    newRateLimiter(10, time.Minute), // per IP, login + signup
 	}
@@ -54,6 +69,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/signup", s.limit(s.authLimit, s.signup))
 	mux.Handle("POST /api/login", s.limit(s.authLimit, s.login))
 	mux.HandleFunc("POST /api/logout", s.logout)
+	mux.Handle("POST /api/password/forgot", s.limit(s.authLimit, s.forgotPassword))
+	mux.Handle("POST /api/password/reset", s.limit(s.authLimit, s.resetPassword))
+	mux.HandleFunc("GET /api/config", s.getConfig)
+	mux.HandleFunc("POST /api/stripe/webhook", s.stripeWebhook)
 
 	// Owner: every handler is scoped to the logged-in owner's business.
 	mux.Handle("GET /api/owner/business", s.auth(s.getBusiness))
@@ -67,6 +86,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/owner/appointments/{id}/status", s.auth(s.setAppointmentStatus))
 	mux.Handle("GET /api/owner/appointments/{id}/messages", s.auth(s.listMessages))
 	mux.Handle("GET /api/owner/stats", s.auth(s.getStats))
+	mux.Handle("PUT /api/owner/password", s.auth(s.changePassword))
+	mux.Handle("DELETE /api/owner/account", s.auth(s.deleteAccount))
+	mux.Handle("GET /api/owner/billing", s.auth(s.getBilling))
+	mux.Handle("POST /api/owner/billing/checkout", s.auth(s.startCheckout))
+	mux.Handle("POST /api/owner/billing/portal", s.auth(s.openPortal))
 
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not found")
@@ -125,6 +149,8 @@ func handleErr(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.As(err, &ve):
 		writeError(w, http.StatusBadRequest, ve.Msg)
+	case errors.Is(err, errNotAccepting):
+		writeError(w, http.StatusForbidden, err.Error())
 	case errors.Is(err, booking.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not found")
 	case errors.Is(err, booking.ErrSlotTaken):

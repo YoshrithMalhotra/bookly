@@ -20,6 +20,12 @@ type Business struct {
 	GoogleReviewURL string    `json:"google_review_url"`
 	OwnerEmail      string    `json:"owner_email"`
 	CreatedAt       time.Time `json:"created_at"`
+
+	SubscriptionStatus   string     `json:"subscription_status"`
+	TrialEndsAt          time.Time  `json:"trial_ends_at"`
+	CurrentPeriodEnd     *time.Time `json:"current_period_end"`
+	StripeCustomerID     string     `json:"-"`
+	StripeSubscriptionID string     `json:"-"`
 }
 
 type Service struct {
@@ -30,11 +36,14 @@ type Service struct {
 	Active      bool   `json:"active"`
 }
 
-const businessCols = `id, name, slug, timezone, coalesce(google_review_url, ''), owner_email, created_at`
+const businessCols = `id, name, slug, timezone, coalesce(google_review_url, ''), owner_email, created_at,
+	subscription_status, trial_ends_at, current_period_end,
+	coalesce(stripe_customer_id, ''), coalesce(stripe_subscription_id, '')`
 
 func scanBusiness(row pgx.Row) (Business, error) {
 	var b Business
-	err := row.Scan(&b.ID, &b.Name, &b.Slug, &b.Timezone, &b.GoogleReviewURL, &b.OwnerEmail, &b.CreatedAt)
+	err := row.Scan(&b.ID, &b.Name, &b.Slug, &b.Timezone, &b.GoogleReviewURL, &b.OwnerEmail, &b.CreatedAt,
+		&b.SubscriptionStatus, &b.TrialEndsAt, &b.CurrentPeriodEnd, &b.StripeCustomerID, &b.StripeSubscriptionID)
 	return b, mapErr(err)
 }
 
@@ -57,6 +66,7 @@ func (s *Store) Credentials(ctx context.Context, email string) (int64, []byte, e
 type NewBusiness struct {
 	Name, Slug, Timezone, OwnerEmail string
 	PasswordHash                     []byte
+	TrialEndsAt                      time.Time
 }
 
 // CreateBusiness signs up a new business with Mon–Fri 09:00–17:00 hours
@@ -66,10 +76,10 @@ func (s *Store) CreateBusiness(ctx context.Context, nb NewBusiness) (Business, e
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		var err error
 		b, err = scanBusiness(tx.QueryRow(ctx, `
-			INSERT INTO businesses (name, slug, timezone, owner_email, password_hash)
-			VALUES ($1, $2, $3, $4, $5)
+			INSERT INTO businesses (name, slug, timezone, owner_email, password_hash, trial_ends_at)
+			VALUES ($1, $2, $3, $4, $5, $6)
 			RETURNING `+businessCols,
-			nb.Name, nb.Slug, nb.Timezone, nb.OwnerEmail, string(nb.PasswordHash)))
+			nb.Name, nb.Slug, nb.Timezone, nb.OwnerEmail, string(nb.PasswordHash), nb.TrialEndsAt))
 		if err != nil {
 			return err
 		}

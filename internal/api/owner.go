@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/mail"
 	"net/url"
@@ -111,8 +112,8 @@ func (s *Server) signup(w http.ResponseWriter, r *http.Request) {
 		handleErr(w, r, err)
 		return
 	}
-	if len(in.Password) < 10 || len(in.Password) > 72 {
-		handleErr(w, r, invalid("password must be 10 to 72 characters"))
+	if err := validPassword(in.Password); err != nil {
+		handleErr(w, r, err)
 		return
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(in.Password), bcryptCost)
@@ -122,6 +123,7 @@ func (s *Server) signup(w http.ResponseWriter, r *http.Request) {
 	}
 	b, err := s.store.CreateBusiness(r.Context(), store.NewBusiness{
 		Name: name, Slug: slug, Timezone: in.Timezone, OwnerEmail: email, PasswordHash: hash,
+		TrialEndsAt: s.now().AddDate(0, 0, s.cfg.TrialDays),
 	})
 	if err != nil {
 		handleErr(w, r, err)
@@ -131,6 +133,10 @@ func (s *Server) signup(w http.ResponseWriter, r *http.Request) {
 		handleErr(w, r, err)
 		return
 	}
+	s.sendEmail(b.OwnerEmail, "Welcome to "+s.cfg.CompanyName, fmt.Sprintf(
+		"Hi,\n\n%s is set up. Your booking link is:\n%s/b/%s\n\n"+
+			"Next: add your services and opening hours at %s/owner\n",
+		b.Name, s.cfg.PublicURL, b.Slug, s.cfg.PublicURL))
 	writeJSON(w, http.StatusCreated, b)
 }
 
@@ -188,7 +194,11 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 // Business settings
 
 func (s *Server) getBusiness(w http.ResponseWriter, r *http.Request) {
-	b, err := s.store.BusinessByID(r.Context(), businessID(r))
+	s.getBusinessByID(w, r, businessID(r))
+}
+
+func (s *Server) getBusinessByID(w http.ResponseWriter, r *http.Request, id int64) {
+	b, err := s.store.BusinessByID(r.Context(), id)
 	if err != nil {
 		handleErr(w, r, err)
 		return
