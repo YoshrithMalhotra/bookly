@@ -7,6 +7,11 @@ Appointment booking for salons, tutors and clinics, with WhatsApp reminders
   free time, and get a WhatsApp reminder 24h before with a link to cancel.
 - **Owners** sign up, add services and opening hours, see their day, and mark
   visits done / no-show. Marking *done* sends the Google review request.
+- **You** get paid by Stripe subscription after a free trial. When a trial ends
+  without a subscription (or a subscription is cancelled/unpaid) the owner's
+  booking page pauses until they subscribe.
+- **Accounts**: login, password reset by email, change password, delete account
+  (cancels the subscription and deletes all data), Terms and Privacy pages.
 
 Backend in Go + Postgres. Frontend in Kotlin/JS, served by the Go API from the
 same origin (no CORS, cookie sessions).
@@ -36,6 +41,8 @@ internal/store/     all SQL, migrations runner, sessions
 internal/api/       routes, JSON, auth, CSRF, rate limits
 internal/worker/    the send loop (FOR UPDATE SKIP LOCKED, retries)
 internal/notify/    Sender interface, fake sender, Twilio WhatsApp sender
+internal/billing/   Stripe client, webhook signature check, "has this business paid?"
+internal/email/     SMTP email (password resets, owner notifications)
 migrations/         schema, embedded into the binaries
 web/                Kotlin/JS frontend (Gradle)
 ```
@@ -59,6 +66,13 @@ All errors are `{"error": "..."}`. Writes must be `Content-Type: application/jso
 | POST | `/api/owner/appointments/{id}/status` | owner: confirmed, cancelled, done, no_show |
 | GET | `/api/owner/appointments/{id}/messages` | owner |
 | GET | `/api/owner/stats` | owner, last 90 days |
+| PUT | `/api/owner/password` | owner: change password |
+| DELETE | `/api/owner/account` | owner: delete everything (needs password) |
+| GET | `/api/owner/billing` | owner: plan status |
+| POST | `/api/owner/billing/checkout`, `/api/owner/billing/portal` | owner → returns a Stripe URL |
+| POST | `/api/password/forgot`, `/api/password/reset` | owner, from the emailed link |
+| POST | `/api/stripe/webhook` | Stripe (signature checked) |
+| GET | `/api/config` | public: company name, price label, trial length |
 
 ## Deploy
 
@@ -96,18 +110,45 @@ retry with backoff (1m, 5m, 25m, 2h) and are marked `failed` after 5 tries or
 straight away for permanent errors (bad number, rejected template); owners see
 the status under **Messages** on each appointment.
 
-## Before you take money
+## Payments (Stripe)
 
-The app is feature-complete for the core flow, but these are business/legal
-items code can't do for you:
+1. In Stripe, create a Product with a recurring Price (e.g. £19/month) and copy
+   its `price_…` id into `STRIPE_PRICE_ID`.
+2. Copy your secret key into `STRIPE_SECRET_KEY` (test key first).
+3. Add a webhook endpoint `https://YOUR_DOMAIN/api/stripe/webhook` with events
+   `checkout.session.completed` and `customer.subscription.created`, `.updated`,
+   `.deleted`, `.paused`, `.resumed`; put its signing secret in `STRIPE_WEBHOOK_SECRET`.
+4. Turn on the **Customer portal** (Settings → Billing → Customer portal) so
+   owners can change card, see invoices and cancel.
+5. Test with card `4242 4242 4242 4242`, then switch to live keys.
 
-- **Billing**: there's no subscription/payment system. Invoice manually at first,
-  or add Stripe Checkout + a `plan` column on `businesses`.
-- **Privacy policy & terms**: you store customers' names and phone numbers and
-  message them; you need a privacy policy, a data processing agreement for
-  business customers, and (UK/EU) GDPR basics like deletion on request.
-- **WhatsApp Business approval** and templates (above) take days, not hours.
-- **Backups**: turn on automated daily backups / PITR on your managed Postgres.
-- **Password reset**: not built yet. Until it is, reset by hand:
-  generate a bcrypt hash and `UPDATE businesses SET password_hash = ... WHERE owner_email = ...`.
-- **Email**: no transactional email (signup confirmation, reset links) yet.
+New businesses get `TRIAL_DAYS` free (default 14, no card needed). The owner
+subscribes from the **Billing** tab; the dashboard warns 7 days before the
+trial ends and when a payment fails. `past_due` keeps the page open while
+Stripe retries the card. Existing appointments and reminders keep working even
+when a page is paused.
+
+## Email
+
+Set `SMTP_*` and `EMAIL_FROM` for any provider (Resend, Postmark, SES, Mailgun…)
+and verify your sending domain (SPF/DKIM) with them. Bookly sends: welcome,
+password reset links (1 hour, single use), and a notice to the owner for each
+new or cancelled booking.
+
+## Before you go live
+
+Code can't do these for you:
+
+- **Legal review**: `/terms` and `/privacy` are a sensible starting template
+  filled from `COMPANY_NAME` / `SUPPORT_EMAIL`, not legal advice. Have them
+  checked for your country (UK/EU GDPR: you're a processor for the businesses'
+  customer data, so offer a DPA).
+- **WhatsApp Business approval** and templates (above) take days.
+- **Stripe account activation** (business details, bank account) before live keys work.
+- **Domain, HTTPS and email domain verification** (SPF/DKIM).
+- **Backups**: turn on daily backups / point-in-time recovery for Postgres.
+- **Monitoring**: point an uptime checker at `/health` and keep an eye on logs
+  for `level=ERROR`.
+
+Not built: customer deposits/prepayment at booking, staff calendars (one
+calendar per business), email verification on signup, multiple users per business.

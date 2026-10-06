@@ -90,6 +90,10 @@ object Router {
             path == "/signup" -> SignupPage(root).show()
             parts.size == 2 && parts[0] == "b" -> BookingPage(root, parts[1]).show()
             parts.size == 2 && parts[0] == "c" -> ManagePage(root, parts[1]).show()
+            path == "/forgot" -> ForgotPage(root).show()
+            parts.size == 2 && parts[0] == "reset" -> ResetPage(root, parts[1]).show()
+            path == "/privacy" -> LegalPage(root, privacy = true).show()
+            path == "/terms" -> LegalPage(root, privacy = false).show()
             parts.firstOrNull() == "owner" -> OwnerPage(root, parts.getOrNull(1) ?: "appointments").show()
             else -> notFound(root)
         }
@@ -106,6 +110,28 @@ fun notFound(root: HTMLElement, what: String = "page") {
                 p { +"Check the link and try again." }
                 link("/", "button", "Go home")
             }
+        }
+    }
+}
+
+/** Deployment settings from /api/config, loaded once. */
+object Config {
+    private var cached: AppConfig? = null
+
+    suspend fun get(): AppConfig = cached ?: try {
+        Api.get<AppConfig>("/api/config").also { cached = it }
+    } catch (e: ApiException) {
+        AppConfig()
+    }
+}
+
+fun FlowContent.siteFooter(extra: FlowContent.() -> Unit = {}) {
+    footer("footer") {
+        extra()
+        div("footer-links") {
+            link("/terms", null, "Terms")
+            +" · "
+            link("/privacy", null, "Privacy")
         }
     }
 }

@@ -45,6 +45,7 @@ class LoginPage(private val root: HTMLElement) {
                                 +(if (busy) "Logging in…" else "Log in")
                             }
                         }
+                        p("muted") { link("/forgot", null, "Forgot your password?") }
                         p("muted") { +"New to Bookly? "; link("/signup", null, "Create an account") }
                     }
                 }
@@ -137,6 +138,15 @@ class SignupPage(private val root: HTMLElement) {
                                     attributes["autocomplete"] = "new-password"
                                 }
                                 small("muted") { +"At least 10 characters." }
+                            }
+                            label("checkbox") {
+                                input(InputType.checkBox) { id = "agree"; required = true }
+                                span {
+                                    +"I agree to the "
+                                    a(href = "/terms", target = "_blank") { +"Terms" }
+                                    +" and "
+                                    a(href = "/privacy", target = "_blank") { +"Privacy Policy" }
+                                }
                             }
                             button(type = ButtonType.submit, classes = "button full") {
                                 disabled = busy

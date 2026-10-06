@@ -32,12 +32,16 @@ class OwnerPage(private val root: HTMLElement, private val tab: String) {
     // Insights tab
     private var stats: StatsResponse? = null
 
+    // Billing (shown as a banner on every tab, and its own tab)
+    private var billing: Billing? = null
+
     private val tabs = listOf(
         "appointments" to "Appointments",
         "services" to "Services",
         "hours" to "Opening hours",
         "settings" to "Settings",
         "insights" to "Insights",
+        "billing" to "Billing",
     )
 
     fun show() {
@@ -49,6 +53,13 @@ class OwnerPage(private val root: HTMLElement, private val tab: String) {
                 val b = Api.get<Business>("/api/owner/business")
                 biz = b
                 date = Fmt.today(b.timezone)
+                billing = Api.get("/api/owner/billing")
+                if (tab == "billing" && kotlinx.browser.window.location.search.contains("checkout=success")) {
+                    notice = "Thanks! Your subscription is being activated; this page will update in a moment."
+                    // The Stripe webhook may land a second after the redirect.
+                    kotlinx.coroutines.delay(2500)
+                    billing = Api.get("/api/owner/billing")
+                }
                 load()
             } catch (e: ApiException) {
                 if (e.status == 401) Router.go("/login", replace = true) else { error = e.message; render() }
@@ -132,6 +143,7 @@ class OwnerPage(private val root: HTMLElement, private val tab: String) {
                     nav("tabs") {
                         for ((key, label) in tabs) link("/owner/$key", if (key == tab) "tab active" else "tab", label)
                     }
+                    billingBanner()
                     errorBox(error)
                     okBox(notice)
                     when (tab) {
@@ -140,6 +152,7 @@ class OwnerPage(private val root: HTMLElement, private val tab: String) {
                         "hours" -> hoursTab()
                         "settings" -> settingsTab(b)
                         "insights" -> insightsTab()
+                        "billing" -> billingTab()
                     }
                 }
             }
@@ -419,6 +432,161 @@ class OwnerPage(private val root: HTMLElement, private val tab: String) {
             }
             p("muted small") { +"Booking link: /b/${b.slug} · Login: ${b.ownerEmail}" }
             button(type = ButtonType.submit, classes = "button") { disabled = busy; +"Save settings" }
+        }
+
+        h2 { +"Change password" }
+        form(classes = "card") {
+            onSubmitFunction = { e -> e.stop(); changePassword() }
+            label {
+                +"Current password"
+                input(InputType.password) { id = "pw-current"; required = true; attributes["autocomplete"] = "current-password" }
+            }
+            label {
+                +"New password"
+                input(InputType.password) {
+                    id = "pw-new"; required = true; minLength = "10"; maxLength = "72"
+                    attributes["autocomplete"] = "new-password"
+                }
+                small("muted") { +"At least 10 characters. Other devices will be logged out." }
+            }
+            button(type = ButtonType.submit, classes = "button") { disabled = busy; +"Change password" }
+        }
+
+        h2 { +"Delete account" }
+        form(classes = "card danger-zone") {
+            onSubmitFunction = { e -> e.stop(); deleteAccount() }
+            p {
+                +"This permanently deletes your business, services, appointments and customer details, "
+                +"and cancels your subscription. It can't be undone."
+            }
+            label {
+                +"Type your password to confirm"
+                input(InputType.password) { id = "del-password"; required = true; attributes["autocomplete"] = "current-password" }
+            }
+            button(type = ButtonType.submit, classes = "button danger") { disabled = busy; +"Delete my account" }
+        }
+    }
+
+    private fun changePassword() {
+        val req = ChangePasswordRequest(rawInputValue("pw-current"), rawInputValue("pw-new"))
+        busy = true; error = null; notice = null; render()
+        scope.launch {
+            try {
+                notice = Api.send<ChangePasswordRequest, MessageResponse>("PUT", "/api/owner/password", req).message
+            } catch (e: ApiException) {
+                handle(e)
+            }
+            busy = false
+            render()
+        }
+    }
+
+    private fun deleteAccount() {
+        val pw = rawInputValue("del-password")
+        if (!window.confirm("Delete your account and all its data permanently?")) return
+        busy = true; error = null; notice = null; render()
+        scope.launch {
+            try {
+                Api.request("DELETE", "/api/owner/account", Api.json.encodeToString(DeleteAccountRequest(pw)))
+                window.alert("Your account has been deleted.")
+                Router.go("/", replace = true)
+            } catch (e: ApiException) {
+                busy = false
+                handle(e)
+                render()
+            }
+        }
+    }
+
+    // Billing
+
+    private fun daysLeft(iso: String): Int =
+        kotlin.math.ceil((Date(iso).getTime() - Date().getTime()) / 86_400_000.0).toInt()
+
+    private fun FlowContent.billingBanner() {
+        val bl = billing ?: return
+        if (!bl.enabled || tab == "billing") return
+        val trialDays = daysLeft(bl.trialEndsAt)
+        when {
+            !bl.active -> div("alert error banner") {
+                +"Your booking page is paused: customers can't book until you subscribe. "
+                link("/owner/billing", null, "Subscribe now")
+            }
+            bl.status == "past_due" -> div("alert error banner") {
+                +"Your last payment failed. Please update your card to keep taking bookings. "
+                link("/owner/billing", null, "Fix billing")
+            }
+            bl.status == "trial" && trialDays <= 7 -> div("alert banner") {
+                +"Your free trial ends in $trialDays day${if (trialDays == 1) "" else "s"}. "
+                link("/owner/billing", null, "Subscribe to keep your booking page open")
+            }
+        }
+    }
+
+    private fun goToStripe(path: String) {
+        busy = true; error = null; notice = null; render()
+        scope.launch {
+            try {
+                val r = Api.request("POST", path).let { Api.json.decodeFromString<RedirectUrl>(it) }
+                window.location.href = r.url
+            } catch (e: ApiException) {
+                busy = false
+                handle(e)
+                render()
+            }
+        }
+    }
+
+    private fun FlowContent.billingTab() {
+        val bl = billing ?: return spinner()
+        val tz = biz?.timezone ?: "UTC"
+        h2 { +"Billing" }
+        if (!bl.enabled) {
+            div("card") { p("muted") { +"Billing isn't set up on this server, so your booking page is always open." } }
+            return
+        }
+        div("card") {
+            val label = when (bl.status) {
+                "trial" -> if (bl.active) "Free trial" else "Trial ended"
+                "active" -> "Active"
+                "trialing" -> "Active (trial)"
+                "past_due" -> "Payment failed"
+                "canceled" -> "Cancelled"
+                "unpaid" -> "Unpaid"
+                "incomplete", "incomplete_expired" -> "Payment not completed"
+                "paused" -> "Paused"
+                else -> bl.status
+            }
+            p {
+                strong { +"Plan: " }
+                +label
+                if (bl.priceLabel.isNotEmpty()) span("muted") { +" · ${bl.priceLabel}" }
+            }
+            when {
+                bl.status == "trial" && bl.active ->
+                    p { +"Your trial ends ${Fmt.dateLong(bl.trialEndsAt, tz)} (${daysLeft(bl.trialEndsAt)} days left). Subscribe any time; you won't lose any trial days' bookings." }
+                !bl.active -> p("danger-text") { +"Your booking page is paused. Existing appointments and reminders still work, but customers can't make new bookings." }
+                bl.currentPeriodEnd != null ->
+                    p { +(if (bl.status == "canceled") "Access ended " else "Next renewal: ") ; +Fmt.dateLong(bl.currentPeriodEnd, tz) }
+            }
+            div("actions") {
+                val subscribed = bl.status in listOf("active", "trialing", "past_due")
+                if (!subscribed) {
+                    button(type = ButtonType.button, classes = "button") {
+                        disabled = busy
+                        onClickFunction = { goToStripe("/api/owner/billing/checkout") }
+                        +(if (busy) "Opening checkout…" else "Subscribe")
+                    }
+                }
+                if (bl.hasCustomer) {
+                    button(type = ButtonType.button, classes = "button ghost") {
+                        disabled = busy
+                        onClickFunction = { goToStripe("/api/owner/billing/portal") }
+                        +"Manage billing, card & invoices"
+                    }
+                }
+            }
+            p("muted small") { +"Payments are processed securely by Stripe. You can cancel any time." }
         }
     }
 

@@ -21,6 +21,7 @@ data class PublicBusiness(
     val services: List<Service>,
     val hours: List<Hours>,
     @SerialName("max_days_ahead") val maxDaysAhead: Int,
+    @SerialName("accepting_bookings") val acceptingBookings: Boolean = true,
 )
 
 @Serializable
@@ -126,3 +127,44 @@ data class StatusRequest(val status: String)
 
 @Serializable
 data class ApiError(val error: String)
+
+@Serializable
+data class AppConfig(
+    @SerialName("company_name") val companyName: String = "Bookly",
+    @SerialName("support_email") val supportEmail: String = "",
+    @SerialName("billing_enabled") val billingEnabled: Boolean = false,
+    @SerialName("price_label") val priceLabel: String = "",
+    @SerialName("trial_days") val trialDays: Int = 14,
+)
+
+@Serializable
+data class Billing(
+    val enabled: Boolean,
+    val status: String,
+    val active: Boolean,
+    @SerialName("trial_ends_at") val trialEndsAt: String,
+    @SerialName("current_period_end") val currentPeriodEnd: String? = null,
+    @SerialName("has_customer") val hasCustomer: Boolean,
+    @SerialName("price_label") val priceLabel: String = "",
+)
+
+@Serializable
+data class RedirectUrl(val url: String)
+
+@Serializable
+data class MessageResponse(val message: String)
+
+@Serializable
+data class ForgotRequest(val email: String)
+
+@Serializable
+data class ResetRequest(val token: String, val password: String)
+
+@Serializable
+data class ChangePasswordRequest(
+    @SerialName("current_password") val currentPassword: String,
+    @SerialName("new_password") val newPassword: String,
+)
+
+@Serializable
+data class DeleteAccountRequest(val password: String)

@@ -65,7 +65,7 @@ class ManagePage(private val root: HTMLElement, private val token: String) {
                         link("/b/${m.business.slug}", "button ghost full", if (a.status == "cancelled") "Book a new time" else "Book another appointment")
                     }
                 }
-                footer("footer") { +"Powered by "; link("/", null, "Bookly") }
+                siteFooter { div { +"Powered by "; link("/", null, "Bookly") } }
             }
         }
     }

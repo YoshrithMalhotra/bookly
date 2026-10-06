@@ -134,6 +134,10 @@ class BookingPage(private val root: HTMLElement, private val slug: String) {
                         confirmation(r)
                         return@main
                     }
+                    if (!b.acceptingBookings) {
+                        div("card") { p { +"${b.name} isn't taking online bookings right now. Please contact them directly." } }
+                        return@main
+                    }
                     if (b.services.isEmpty()) {
                         div("card") { p { +"${b.name} isn't taking online bookings yet." } }
                         return@main
@@ -142,7 +146,7 @@ class BookingPage(private val root: HTMLElement, private val slug: String) {
                     if (service != null) dateStep(b)
                     if (slot != null) detailsStep(b)
                 }
-                footer("footer") { +"Powered by "; link("/", null, "Bookly") }
+                siteFooter { div { +"Powered by "; link("/", null, "Bookly") } }
             }
         }
     }

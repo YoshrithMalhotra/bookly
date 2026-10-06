@@ -208,3 +208,16 @@ ul.messages { margin: .5rem 0 0; padding-left: 1.1rem; }
   .hours-row label { grid-column: 1 / -1; }
   .hours-row > span { display: none; }
 }
+
+/* Billing, account, legal */
+.banner { display: block; }
+.alert.banner:not(.error) { background: var(--brand-soft); color: var(--text); }
+.danger-zone { border-color: var(--danger); }
+.pricing { margin-top: 2rem; max-width: 420px; }
+.pricing .price { font-size: 1.8rem; font-weight: 700; margin-bottom: .5rem; }
+.pricing ul { padding-left: 1.1rem; }
+.footer-links { margin-top: .4rem; }
+.footer-links a { color: var(--muted); }
+.legal h2 { margin-top: 1.5rem; }
+.legal p, .legal li { color: var(--text); }
+label.checkbox span { font-weight: 500; }
