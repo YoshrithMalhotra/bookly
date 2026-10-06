@@ -72,7 +72,7 @@ func (s *Server) Handler() http.Handler {
 		writeError(w, http.StatusNotFound, "not found")
 	})
 	if s.cfg.WebDir != "" {
-		mux.Handle("GET /", spa(s.cfg.WebDir))
+		mux.Handle("/", spa(s.cfg.WebDir))
 	}
 
 	return s.recoverer(s.logRequests(s.securityHeaders(s.csrf(mux))))

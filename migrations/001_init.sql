@@ -1,5 +1,5 @@
--- 001_init.sql — YOU write this one. Runs automatically the first time
--- Postgres starts (see docker-compose.yml). Use `make db-reset` to re-run.
+-- 001_init.sql — initial schema. Applied by the api/worker on start
+-- (internal/store/migrate.go); `make db-reset` wipes the database.
 --
 -- Tables to create:
 --   businesses          id, name, slug (unique), timezone, google_review_url,

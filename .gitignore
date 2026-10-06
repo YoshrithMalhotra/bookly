@@ -3,3 +3,6 @@
 /bin/
 web/node_modules/
 web/dist/
+web/build/
+web/.gradle/
+web/.kotlin/

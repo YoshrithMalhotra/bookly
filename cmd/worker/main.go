@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	_ "time/tzdata" // timezone database baked in, so minimal images work
 
 	"github.com/YoshrithMalhotra/bookly/internal/config"
 	"github.com/YoshrithMalhotra/bookly/internal/logging"

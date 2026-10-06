@@ -289,3 +289,28 @@ func TestCSRFAndRateLimit(t *testing.T) {
 		t.Error("login was never rate limited")
 	}
 }
+
+func TestServesFrontend(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(dir+"/index.html", []byte("<html>app</html>"), 0o644)
+	os.WriteFile(dir+"/app.js", []byte("console.log(1)"), 0o644)
+	s := testdb.New(t)
+	ts := httptest.NewServer(New(s, config.Config{Env: "dev", PublicURL: "http://x", WebDir: dir}).Handler())
+	defer ts.Close()
+
+	for path, want := range map[string]string{"/": "<html>app</html>", "/b/salon": "<html>app</html>", "/app.js": "console.log(1)"} {
+		resp, err := http.Get(ts.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 || string(body) != want {
+			t.Errorf("%s: %d %q", path, resp.StatusCode, body)
+		}
+	}
+	resp, _ := http.Get(ts.URL + "/api/nope")
+	if resp.StatusCode != 404 {
+		t.Errorf("/api/nope: %d", resp.StatusCode)
+	}
+}
