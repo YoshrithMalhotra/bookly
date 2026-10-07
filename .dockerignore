@@ -1,0 +1,7 @@
+.git
+.env
+bin/
+web/build/
+web/.gradle/
+web/.kotlin/
+**/node_modules/
