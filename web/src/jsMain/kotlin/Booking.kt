@@ -21,6 +21,7 @@ class BookingPage(private val root: HTMLElement, private val slug: String) {
     // Keep what the customer typed across re-renders.
     private var customerName = ""
     private var customerPhone = ""
+    private var customerNotes = ""
     private var optIn = true
 
     fun show() {
@@ -83,6 +84,7 @@ class BookingPage(private val root: HTMLElement, private val slug: String) {
         if (document.getElementById("name") != null) {
             customerName = inputValue("name")
             customerPhone = inputValue("phone")
+            customerNotes = (document.getElementById("notes") as? org.w3c.dom.HTMLTextAreaElement)?.value?.trim() ?: ""
             optIn = checked("optin")
         }
     }
@@ -97,7 +99,7 @@ class BookingPage(private val root: HTMLElement, private val slug: String) {
             try {
                 result = Api.send<BookingRequest, BookingResult>(
                     "POST", "/api/businesses/${b.slug}/appointments",
-                    BookingRequest(s.id, start, customerName, customerPhone, optIn),
+                    BookingRequest(s.id, start, customerName, customerPhone, optIn, customerNotes),
                 )
             } catch (e: ApiException) {
                 error = e.message
@@ -162,7 +164,7 @@ class BookingPage(private val root: HTMLElement, private val slug: String) {
                         span("choice-title") { +s.name }
                         span("choice-meta") {
                             +Fmt.duration(s.durationMin)
-                            if (s.price.toDoubleOrNull() != 0.0) +" · ${s.price}"
+                            if (s.price.toDoubleOrNull() != 0.0) +" · ${Fmt.money(s.price, b.currency)}"
                         }
                     }
                 }
@@ -243,6 +245,14 @@ class BookingPage(private val root: HTMLElement, private val slug: String) {
                     input(InputType.tel) {
                         id = "phone"; required = true; value = customerPhone; placeholder = "+44 7700 900123"
                         attributes["autocomplete"] = "tel"
+                    }
+                }
+                label {
+                    +"Anything we should know? "
+                    span("muted") { +"(optional)" }
+                    textArea {
+                        id = "notes"; maxLength = "500"; rows = "2"
+                        +customerNotes
                     }
                 }
                 label("checkbox") {

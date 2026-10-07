@@ -22,6 +22,7 @@ data class PublicBusiness(
     val hours: List<Hours>,
     @SerialName("max_days_ahead") val maxDaysAhead: Int,
     @SerialName("accepting_bookings") val acceptingBookings: Boolean = true,
+    val currency: String = "GBP",
 )
 
 @Serializable
@@ -38,6 +39,8 @@ data class Appointment(
     @SerialName("ends_at") val endsAt: String,
     val status: String,
     @SerialName("whatsapp_opt_in") val whatsappOptIn: Boolean,
+    val source: String = "online",
+    val notes: String = "",
 )
 
 @Serializable
@@ -66,6 +69,8 @@ data class Business(
     val timezone: String,
     @SerialName("google_review_url") val googleReviewUrl: String,
     @SerialName("owner_email") val ownerEmail: String,
+    val currency: String = "GBP",
+    @SerialName("email_verified") val emailVerified: Boolean = true,
 )
 
 @Serializable
@@ -101,6 +106,7 @@ data class BookingRequest(
     @SerialName("customer_name") val customerName: String,
     @SerialName("customer_phone") val customerPhone: String,
     @SerialName("whatsapp_opt_in") val whatsappOptIn: Boolean,
+    val notes: String = "",
 )
 
 @Serializable
@@ -120,6 +126,7 @@ data class BusinessUpdate(
     val name: String,
     val timezone: String,
     @SerialName("google_review_url") val googleReviewUrl: String,
+    val currency: String,
 )
 
 @Serializable
@@ -168,3 +175,29 @@ data class ChangePasswordRequest(
 
 @Serializable
 data class DeleteAccountRequest(val password: String)
+
+@Serializable
+data class OwnerBookingResult(val appointment: Appointment)
+
+@Serializable
+data class RescheduleRequest(@SerialName("starts_at") val startsAt: String)
+
+@Serializable
+data class TimeOff(
+    val id: Long = 0,
+    @SerialName("starts_at") val startsAt: String,
+    @SerialName("ends_at") val endsAt: String,
+    val reason: String = "",
+)
+
+@Serializable
+data class TimeOffResult(
+    @SerialName("time_off") val timeOff: TimeOff,
+    @SerialName("clashing_appointments") val clashingAppointments: Int,
+)
+
+@Serializable
+data class TokenRequest(val token: String)
+
+@Serializable
+data class ChangeEmailRequest(val email: String, val password: String)

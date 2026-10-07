@@ -22,12 +22,16 @@ class OwnerPage(private val root: HTMLElement, private val tab: String) {
     private var openMessages: Long? = null
     private var messages: List<Message>? = null
 
-    // Services tab
+    private var newBooking = false   // "New booking" form open
+    private var moving: Long? = null // appointment being rescheduled
+
+    // Services tab (also used by the new booking form)
     private var services: List<Service>? = null
     private var editing: Long? = null // service id being edited; 0 = new
 
     // Hours tab
     private var hours: List<Hours>? = null
+    private var timeOff: List<TimeOff>? = null
 
     // Insights tab
     private var stats: StatsResponse? = null
@@ -70,9 +74,15 @@ class OwnerPage(private val root: HTMLElement, private val tab: String) {
     private suspend fun load() {
         try {
             when (tab) {
-                "appointments" -> day = Api.get("/api/owner/appointments?date=$date")
+                "appointments" -> {
+                    day = Api.get("/api/owner/appointments?date=$date")
+                    if (services == null) services = Api.get("/api/owner/services")
+                }
                 "services" -> services = Api.get("/api/owner/services")
-                "hours" -> hours = Api.get("/api/owner/hours")
+                "hours" -> {
+                    hours = Api.get("/api/owner/hours")
+                    timeOff = Api.get("/api/owner/time-off")
+                }
                 "insights" -> stats = Api.get("/api/owner/stats")
             }
         } catch (e: ApiException) {
@@ -91,7 +101,7 @@ class OwnerPage(private val root: HTMLElement, private val tab: String) {
         scope.launch {
             try {
                 block()
-                notice = success
+                if (success != null) notice = success
             } catch (e: ApiException) {
                 handle(e)
             }
@@ -144,6 +154,7 @@ class OwnerPage(private val root: HTMLElement, private val tab: String) {
                         for ((key, label) in tabs) link("/owner/$key", if (key == tab) "tab active" else "tab", label)
                     }
                     billingBanner()
+                    verifyBanner(b)
                     errorBox(error)
                     okBox(notice)
                     when (tab) {
@@ -208,7 +219,14 @@ class OwnerPage(private val root: HTMLElement, private val tab: String) {
                 button(type = ButtonType.button, classes = "button ghost") { onClickFunction = { setDate(today) }; +"Today" }
             }
         }
-        h2 { +(if (date == today) "Today · " else "") ; +Fmt.day(date) }
+        div("row-between") {
+            h2 { +(if (date == today) "Today · " else ""); +Fmt.day(date) }
+            if (!newBooking) button(type = ButtonType.button, classes = "button") {
+                onClickFunction = { newBooking = true; notice = null; render() }
+                +"New booking"
+            }
+        }
+        if (newBooking) newBookingForm(b)
         val d = day ?: return spinner()
         if (d.appointments.isEmpty()) {
             div("card empty") { p("muted") { +"No appointments on this day." } }
@@ -224,8 +242,12 @@ class OwnerPage(private val root: HTMLElement, private val tab: String) {
                         span("muted small") { +"– ${Fmt.time(a.endsAt, b.timezone)}" }
                     }
                     div("appt-main") {
-                        div { strong { +a.customerName }; +" "; statusBadge(a.status) }
+                        div {
+                            strong { +a.customerName }; +" "; statusBadge(a.status)
+                            if (a.source == "owner") span("badge badge-cancelled") { +"Added by you" }
+                        }
                         div("muted") { +a.serviceName }
+                        if (a.notes.isNotEmpty()) div("note small") { +"“${a.notes}”" }
                         div("small") {
                             a(href = "tel:${a.customerPhone}") { +a.customerPhone }
                             +" · "
@@ -239,6 +261,7 @@ class OwnerPage(private val root: HTMLElement, private val tab: String) {
                             }
                         }
                         if (openMessages == a.id) messagesList(b)
+                        if (moving == a.id) moveForm(a, b)
                     }
                     div("appt-actions") {
                         fun action(label: String, status: String, cls: String = "button ghost small") {
@@ -253,8 +276,13 @@ class OwnerPage(private val root: HTMLElement, private val tab: String) {
                                 if (started) {
                                     action("Done", "done", "button small")
                                     action("No-show", "no_show")
-                                } else if (a.status == "booked") {
-                                    action("Confirm", "confirmed")
+                                } else {
+                                    if (a.status == "booked") action("Confirm", "confirmed")
+                                    button(type = ButtonType.button, classes = "button ghost small") {
+                                        disabled = busy
+                                        onClickFunction = { moving = if (moving == a.id) null else a.id; render() }
+                                        +"Move"
+                                    }
                                 }
                                 action("Cancel", "cancelled", "button ghost small danger-text")
                             }
@@ -283,6 +311,81 @@ class OwnerPage(private val root: HTMLElement, private val tab: String) {
                     m.lastError?.let { if (m.status != "sent") span("danger-text") { +" ($it)" } }
                 }
             }
+        }
+    }
+
+    private fun saveNewBooking(b: Business) {
+        val d = rawInputValue("nb-date")
+        val t = rawInputValue("nb-time")
+        if (d.isEmpty() || t.isEmpty()) { error = "Pick a date and time."; render(); return }
+        val req = BookingRequest(
+            serviceId = selectValue("nb-service").toLongOrNull() ?: 0,
+            startsAt = Fmt.zonedToIso(d, t, b.timezone),
+            customerName = inputValue("nb-name"),
+            customerPhone = inputValue("nb-phone"),
+            whatsappOptIn = checked("nb-optin"),
+            notes = inputValue("nb-notes"),
+        )
+        act("Booking added.") {
+            Api.send<BookingRequest, OwnerBookingResult>("POST", "/api/owner/appointments", req)
+            newBooking = false
+            date = d
+            day = Api.get("/api/owner/appointments?date=$date")
+        }
+    }
+
+    private fun FlowContent.newBookingForm(b: Business) {
+        val svcs = services.orEmpty().filter { it.active }
+        form(classes = "card") {
+            onSubmitFunction = { e -> e.stop(); saveNewBooking(b) }
+            h3 { +"New booking" }
+            p("muted small") { +"For phone bookings and walk-ins. You can book outside opening hours; double bookings are still blocked." }
+            if (svcs.isEmpty()) {
+                p { +"Add a service first."; +" "; link("/owner/services", null, "Services") }
+                return@form
+            }
+            div("grid3") {
+                label {
+                    +"Service"
+                    select { id = "nb-service"; for (s in svcs) option { value = s.id.toString(); +"${s.name} (${Fmt.duration(s.durationMin)})" } }
+                }
+                label { +"Date"; input(InputType.date) { id = "nb-date"; required = true; value = date } }
+                label { +"Start time"; input(InputType.time) { id = "nb-time"; required = true; step = "300" } }
+            }
+            div("grid3") {
+                label { +"Customer name"; input(InputType.text) { id = "nb-name"; required = true; maxLength = "100" } }
+                label { +"Mobile number"; input(InputType.tel) { id = "nb-phone"; required = true; placeholder = "+44 7700 900123" } }
+                label { +"Note"; input(InputType.text) { id = "nb-notes"; maxLength = "500"; placeholder = "Optional, only you see it" } }
+            }
+            label("checkbox") {
+                input(InputType.checkBox) { id = "nb-optin" }
+                +"Customer agreed to a WhatsApp reminder"
+            }
+            div("actions") {
+                button(type = ButtonType.submit, classes = "button") { disabled = busy; +"Add booking" }
+                button(type = ButtonType.button, classes = "button ghost") { onClickFunction = { newBooking = false; render() }; +"Cancel" }
+            }
+        }
+    }
+
+    private fun FlowContent.moveForm(a: Appointment, b: Business) {
+        form(classes = "move-form") {
+            onSubmitFunction = { e ->
+                e.stop()
+                val d = rawInputValue("mv-date")
+                val t = rawInputValue("mv-time")
+                if (d.isNotEmpty() && t.isNotEmpty()) {
+                    act("Appointment moved. The customer's reminder will show the new time.") {
+                        Api.send<RescheduleRequest, Appointment>("POST", "/api/owner/appointments/${a.id}/reschedule",
+                            RescheduleRequest(Fmt.zonedToIso(d, t, b.timezone)))
+                        moving = null
+                        day = Api.get("/api/owner/appointments?date=$date")
+                    }
+                }
+            }
+            input(InputType.date) { id = "mv-date"; required = true; value = Fmt.dateIn(a.startsAt, b.timezone); attributes["aria-label"] = "New date" }
+            input(InputType.time) { id = "mv-time"; required = true; step = "300"; value = Fmt.clock(a.startsAt, b.timezone); attributes["aria-label"] = "New time" }
+            button(type = ButtonType.submit, classes = "button small") { disabled = busy; +"Move" }
         }
     }
 
@@ -349,7 +452,7 @@ class OwnerPage(private val root: HTMLElement, private val tab: String) {
                     div {
                         strong { +s.name }
                         if (!s.active) span("badge badge-cancelled") { +"Hidden" }
-                        div("muted small") { +Fmt.duration(s.durationMin); +" · "; +s.price }
+                        div("muted small") { +Fmt.duration(s.durationMin); +" · "; +Fmt.money(s.price, biz?.currency ?: "GBP") }
                     }
                     button(type = ButtonType.button, classes = "button ghost small") {
                         onClickFunction = { editing = s.id; notice = null; render() }
@@ -398,12 +501,70 @@ class OwnerPage(private val root: HTMLElement, private val tab: String) {
             }
             button(type = ButtonType.submit, classes = "button") { disabled = busy; +"Save hours" }
         }
+        timeOffSection()
+    }
+
+    private fun addTimeOff() {
+        val b = biz ?: return
+        val fromD = rawInputValue("to-from-date"); val fromT = rawInputValue("to-from-time").ifEmpty { "00:00" }
+        val toD = rawInputValue("to-to-date"); val toT = rawInputValue("to-to-time").ifEmpty { "23:59" }
+        if (fromD.isEmpty() || toD.isEmpty()) { error = "Pick the first and last day."; render(); return }
+        val t = TimeOff(startsAt = Fmt.zonedToIso(fromD, fromT, b.timezone), endsAt = Fmt.zonedToIso(toD, toT, b.timezone),
+            reason = inputValue("to-reason"))
+        act {
+            val r = Api.send<TimeOff, TimeOffResult>("POST", "/api/owner/time-off", t)
+            timeOff = Api.get("/api/owner/time-off")
+            notice = if (r.clashingAppointments > 0)
+                "Time off added. ${r.clashingAppointments} existing appointment(s) fall in this period: move or cancel them from Appointments."
+            else "Time off added. Customers can't book during it."
+        }
+    }
+
+    private fun FlowContent.timeOffSection() {
+        val b = biz ?: return
+        val list = timeOff ?: return
+        h2 { +"Time off" }
+        p("muted") { +"Holidays, breaks and days off. Customers can't book during these times." }
+        if (list.isNotEmpty()) {
+            ul("services") {
+                for (t in list) li("card service") {
+                    div {
+                        strong { +"${Fmt.dateLong(t.startsAt, b.timezone)} ${Fmt.clock(t.startsAt, b.timezone)}" }
+                        +" → "
+                        strong { +"${Fmt.dateLong(t.endsAt, b.timezone)} ${Fmt.clock(t.endsAt, b.timezone)}" }
+                        if (t.reason.isNotEmpty()) div("muted small") { +t.reason }
+                    }
+                    button(type = ButtonType.button, classes = "button ghost small danger-text") {
+                        disabled = busy
+                        onClickFunction = {
+                            act("Time off removed.") {
+                                Api.request("DELETE", "/api/owner/time-off/${t.id}")
+                                timeOff = Api.get("/api/owner/time-off")
+                            }
+                        }
+                        +"Remove"
+                    }
+                }
+            }
+        }
+        form(classes = "card") {
+            onSubmitFunction = { e -> e.stop(); addTimeOff() }
+            h3 { +"Add time off" }
+            div("grid4") {
+                label { +"From"; input(InputType.date) { id = "to-from-date"; required = true; value = date.ifEmpty { Fmt.today(b.timezone) } } }
+                label { +"at"; input(InputType.time) { id = "to-from-time"; value = "00:00" } }
+                label { +"Until"; input(InputType.date) { id = "to-to-date"; required = true; value = date.ifEmpty { Fmt.today(b.timezone) } } }
+                label { +"at"; input(InputType.time) { id = "to-to-time"; value = "23:59" } }
+            }
+            label { +"Reason (only you see it)"; input(InputType.text) { id = "to-reason"; maxLength = "200"; placeholder = "Holiday" } }
+            button(type = ButtonType.submit, classes = "button") { disabled = busy; +"Add time off" }
+        }
     }
 
     // Settings
 
     private fun saveSettings() {
-        val update = BusinessUpdate(inputValue("set-name"), selectValue("set-tz"), inputValue("set-review"))
+        val update = BusinessUpdate(inputValue("set-name"), selectValue("set-tz"), inputValue("set-review"), selectValue("set-currency"))
         act("Settings saved.") {
             biz = Api.send<BusinessUpdate, Business>("PUT", "/api/owner/business", update)
         }
@@ -423,6 +584,14 @@ class OwnerPage(private val root: HTMLElement, private val tab: String) {
                 }
             }
             label {
+                +"Currency"
+                select {
+                    id = "set-currency"
+                    val list = if (b.currency in Fmt.currencies) Fmt.currencies else listOf(b.currency) + Fmt.currencies
+                    for (c in list) option { value = c; selected = c == b.currency; +"$c (${Fmt.money("0", c).replace(Regex("[0-9.,\\s]"), "")})" }
+                }
+            }
+            label {
                 +"Google review link"
                 input(InputType.url) { id = "set-review"; value = b.googleReviewUrl; placeholder = "https://g.page/r/…/review" }
                 small("muted") {
@@ -432,6 +601,26 @@ class OwnerPage(private val root: HTMLElement, private val tab: String) {
             }
             p("muted small") { +"Booking link: /b/${b.slug} · Login: ${b.ownerEmail}" }
             button(type = ButtonType.submit, classes = "button") { disabled = busy; +"Save settings" }
+        }
+
+        h2 { +"Login email" }
+        form(classes = "card") {
+            onSubmitFunction = { e -> e.stop(); changeEmail() }
+            p {
+                +"Currently "; strong { +b.ownerEmail }
+                if (!b.emailVerified) span("badge badge-no_show") { +"Not confirmed" }
+            }
+            div("grid3") {
+                label { +"New email"; input(InputType.email) { id = "em-new"; required = true; attributes["autocomplete"] = "email" } }
+                label { +"Your password"; input(InputType.password) { id = "em-password"; required = true; attributes["autocomplete"] = "current-password" } }
+            }
+            button(type = ButtonType.submit, classes = "button") { disabled = busy; +"Change email" }
+        }
+
+        h2 { +"Your data" }
+        div("card") {
+            p { +"Download every appointment as a spreadsheet (CSV) for your records or to move to another system." }
+            a(href = "/api/owner/export.csv", classes = "button ghost") { attributes["download"] = ""; +"Download appointments" }
         }
 
         h2 { +"Change password" }
@@ -464,6 +653,27 @@ class OwnerPage(private val root: HTMLElement, private val tab: String) {
                 input(InputType.password) { id = "del-password"; required = true; attributes["autocomplete"] = "current-password" }
             }
             button(type = ButtonType.submit, classes = "button danger") { disabled = busy; +"Delete my account" }
+        }
+    }
+
+    private fun changeEmail() {
+        val req = ChangeEmailRequest(inputValue("em-new"), rawInputValue("em-password"))
+        act("Email changed. We've sent a confirmation link to the new address.") {
+            biz = Api.send<ChangeEmailRequest, Business>("PUT", "/api/owner/email", req)
+        }
+    }
+
+    private fun FlowContent.verifyBanner(b: Business) {
+        if (b.emailVerified) return
+        div("alert banner") {
+            +"Please confirm your email (${b.ownerEmail}) using the link we sent, so you can reset your password if you ever need to. "
+            a(href = "#") {
+                onClickFunction = { e ->
+                    e.preventDefault()
+                    act("We've sent a new confirmation link.") { Api.post("/api/owner/email/resend") }
+                }
+                +"Resend"
+            }
         }
     }
 

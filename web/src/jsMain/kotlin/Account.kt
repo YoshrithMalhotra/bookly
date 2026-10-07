@@ -121,3 +121,31 @@ class ResetPage(private val root: HTMLElement, private val token: String) {
         }
     }
 }
+
+/** /verify/{token}: confirm the owner's email address. */
+class VerifyPage(private val root: HTMLElement, private val token: String) {
+    fun show() {
+        setTitle("Confirm email")
+        root.render { div("page") { topBar(); main("container narrow") { spinner("Confirming…") } } }
+        scope.launch {
+            val (ok, msg) = try {
+                true to Api.send<TokenRequest, MessageResponse>("POST", "/api/email/verify", TokenRequest(token)).message
+            } catch (e: ApiException) {
+                false to (e.message ?: "Something went wrong")
+            }
+            root.render {
+                div("page") {
+                    topBar()
+                    main("container narrow") {
+                        div("card") {
+                            h1 { +(if (ok) "Email confirmed" else "Couldn't confirm") }
+                            if (ok) okBox(msg) else errorBox(msg)
+                            if (!ok) p("muted") { +"Log in and use “Resend” on your dashboard to get a new link." }
+                            link("/owner", "button", "Go to your dashboard")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

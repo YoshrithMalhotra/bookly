@@ -221,3 +221,15 @@ ul.messages { margin: .5rem 0 0; padding-left: 1.1rem; }
 .legal h2 { margin-top: 1.5rem; }
 .legal p, .legal li { color: var(--text); }
 label.checkbox span { font-weight: 500; }
+
+/* Owner operations */
+.note { font-style: italic; color: var(--muted); }
+.move-form { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-top: .5rem; }
+.move-form input { margin-top: 0; width: auto; }
+.grid4 { display: grid; grid-template-columns: 2fr 1fr 2fr 1fr; gap: .75rem; }
+textarea {
+  display: block; width: 100%; margin-top: .35rem; padding: .55rem .75rem; border: 1px solid var(--border);
+  border-radius: 10px; background: var(--card); color: var(--text); font: inherit; resize: vertical;
+}
+.badge + .badge { margin-left: .3rem; }
+@media (max-width: 640px) { .grid4 { grid-template-columns: 1fr 1fr; } }

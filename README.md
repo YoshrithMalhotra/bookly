@@ -10,7 +10,11 @@ Appointment booking for salons, tutors and clinics, with WhatsApp reminders
 - **You** get paid by Stripe subscription after a free trial. When a trial ends
   without a subscription (or a subscription is cancelled/unpaid) the owner's
   booking page pauses until they subscribe.
-- **Accounts**: login, password reset by email, change password, delete account
+- **Running the day**: owners add phone bookings and walk-ins, move
+  appointments (the reminder follows), block holidays and breaks as time off,
+  see customers' notes, and download everything as CSV.
+- **Accounts**: login, email confirmation, change login email, password reset
+  by email, change password, delete account
   (cancels the subscription and deletes all data), Terms and Privacy pages.
 
 Backend in Go + Postgres. Frontend in Kotlin/JS, served by the Go API from the
@@ -73,6 +77,12 @@ All errors are `{"error": "..."}`. Writes must be `Content-Type: application/jso
 | POST | `/api/password/forgot`, `/api/password/reset` | owner, from the emailed link |
 | POST | `/api/stripe/webhook` | Stripe (signature checked) |
 | GET | `/api/config` | public: company name, price label, trial length |
+| POST | `/api/owner/appointments` | owner: phone booking / walk-in |
+| POST | `/api/owner/appointments/{id}/reschedule` | owner: move an upcoming appointment |
+| GET, POST, DELETE | `/api/owner/time-off`, `/api/owner/time-off/{id}` | owner: holidays and breaks |
+| PUT | `/api/owner/email` | owner: change login email (needs password) |
+| POST | `/api/owner/email/resend`, `/api/email/verify` | email confirmation |
+| GET | `/api/owner/export.csv` | owner: all appointments |
 
 ## Deploy
 
@@ -150,5 +160,8 @@ Code can't do these for you:
 - **Monitoring**: point an uptime checker at `/health` and keep an eye on logs
   for `level=ERROR`.
 
-Not built: customer deposits/prepayment at booking, staff calendars (one
-calendar per business), email verification on signup, multiple users per business.
+Deliberately not built yet (each is a sizeable product decision, not a gap
+in what's here): taking deposits from customers at booking (needs Stripe
+Connect so money goes to each business), several staff members with their
+own calendars, several logins per business, and two-way WhatsApp
+(customers confirming by replying).

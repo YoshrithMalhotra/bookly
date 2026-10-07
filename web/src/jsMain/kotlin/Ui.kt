@@ -91,6 +91,7 @@ object Router {
             parts.size == 2 && parts[0] == "b" -> BookingPage(root, parts[1]).show()
             parts.size == 2 && parts[0] == "c" -> ManagePage(root, parts[1]).show()
             path == "/forgot" -> ForgotPage(root).show()
+            parts.size == 2 && parts[0] == "verify" -> VerifyPage(root, parts[1]).show()
             parts.size == 2 && parts[0] == "reset" -> ResetPage(root, parts[1]).show()
             path == "/privacy" -> LegalPage(root, privacy = true).show()
             path == "/terms" -> LegalPage(root, privacy = false).show()
