@@ -51,6 +51,7 @@ func (s *Server) getPublicBusiness(w http.ResponseWriter, r *http.Request) {
 		"hours":              toHoursJSON(hours),
 		"max_days_ahead":     booking.MaxDaysAhead,
 		"accepting_bookings": s.accepting(b),
+		"currency":           b.Currency,
 	})
 }
 
@@ -120,6 +121,7 @@ type bookingRequest struct {
 	CustomerName  string    `json:"customer_name"`
 	CustomerPhone string    `json:"customer_phone"`
 	WhatsAppOptIn bool      `json:"whatsapp_opt_in"`
+	Notes         string    `json:"notes"`
 }
 
 func (s *Server) createAppointment(w http.ResponseWriter, r *http.Request) {
@@ -140,27 +142,28 @@ func (s *Server) createAppointment(w http.ResponseWriter, r *http.Request) {
 		CustomerName:  in.CustomerName,
 		CustomerPhone: in.CustomerPhone,
 		WhatsAppOptIn: in.WhatsAppOptIn,
+		Notes:         in.Notes,
 	}, loc, hours, time.Duration(svc.DurationMin)*time.Minute, s.cfg.DefaultCountryCode, now)
 	if err != nil {
 		handleErr(w, r, err)
 		return
 	}
 	msgs := booking.PlanMessages(req.StartsAt, endsAt, now, req.WhatsAppOptIn)
-	id, token, err := s.store.CreateAppointment(r.Context(), b.ID, req, endsAt, msgs)
+	id, token, err := s.store.CreateAppointment(r.Context(), b.ID, req, endsAt, msgs, store.SourceOnline)
 	if err != nil {
 		handleErr(w, r, err)
 		return
 	}
 	s.sendEmail(b.OwnerEmail, "New booking: "+req.CustomerName+", "+req.StartsAt.In(loc).Format("Mon 2 Jan 15:04"),
-		fmt.Sprintf("%s booked %s on %s.\nPhone: %s\n\nSee your day: %s/owner\n",
+		fmt.Sprintf("%s booked %s on %s.\nPhone: %s\n%s\nSee your day: %s/owner\n",
 			req.CustomerName, svc.Name, req.StartsAt.In(loc).Format("Monday 2 January at 15:04"),
-			req.CustomerPhone, s.cfg.PublicURL))
+			req.CustomerPhone, noteLine(req.Notes), s.cfg.PublicURL))
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"appointment": store.AppointmentView{
 			ID: id, ServiceID: svc.ID, ServiceName: svc.Name,
 			CustomerName: req.CustomerName, CustomerPhone: req.CustomerPhone,
 			StartsAt: req.StartsAt, EndsAt: endsAt, Status: booking.StatusBooked,
-			WhatsAppOptIn: req.WhatsAppOptIn,
+			WhatsAppOptIn: req.WhatsAppOptIn, Source: store.SourceOnline, Notes: req.Notes,
 		},
 		"business":     map[string]string{"name": b.Name, "slug": b.Slug, "timezone": b.Timezone},
 		"manage_token": token,
@@ -174,6 +177,7 @@ func (s *Server) getManagedAppointment(w http.ResponseWriter, r *http.Request) {
 		handleErr(w, r, err)
 		return
 	}
+	a.Notes = "" // may be the owner's private note
 	canCancel := (a.Status == booking.StatusBooked || a.Status == booking.StatusConfirmed) && a.StartsAt.After(s.now())
 	writeJSON(w, http.StatusOK, map[string]any{
 		"appointment": a,
@@ -198,4 +202,11 @@ func (s *Server) cancelManagedAppointment(w http.ResponseWriter, r *http.Request
 			fmt.Sprintf("%s cancelled their %s on %s. The slot is free again.\n", a.CustomerName, a.ServiceName, when))
 	}
 	s.getManagedAppointment(w, r)
+}
+
+func noteLine(n string) string {
+	if n == "" {
+		return ""
+	}
+	return "Note: " + n + "\n"
 }

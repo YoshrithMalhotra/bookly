@@ -161,24 +161,57 @@ type Request struct {
 	CustomerName  string
 	CustomerPhone string
 	WhatsAppOptIn bool
+	Notes         string // optional note for the business
+}
+
+const MaxNotes = 500
+
+// cleanCustomer validates the fields shared by customer and owner bookings.
+func cleanCustomer(req Request, countryCode string) (Request, error) {
+	req.CustomerName = strings.Join(strings.Fields(req.CustomerName), " ")
+	if req.CustomerName == "" {
+		return req, invalid("please enter your name")
+	}
+	if utf8.RuneCountInString(req.CustomerName) > 100 {
+		return req, invalid("name is too long")
+	}
+	phone, err := NormalizePhone(req.CustomerPhone, countryCode)
+	if err != nil {
+		return req, err
+	}
+	req.CustomerPhone = phone
+	req.Notes = strings.TrimSpace(req.Notes)
+	if utf8.RuneCountInString(req.Notes) > MaxNotes {
+		return req, invalid("note is too long (max %d characters)", MaxNotes)
+	}
+	return req, nil
+}
+
+// ValidateOwner checks a booking the owner adds from the dashboard (phone
+// bookings, walk-ins). Owners may book outside opening hours and off the
+// slot grid, and may record visits up to a year back.
+func ValidateOwner(req Request, duration time.Duration, countryCode string, now time.Time) (Request, time.Time, error) {
+	req, err := cleanCustomer(req, countryCode)
+	if err != nil {
+		return req, time.Time{}, err
+	}
+	if req.StartsAt.IsZero() {
+		return req, time.Time{}, invalid("please pick a start time")
+	}
+	if req.StartsAt.Before(now.AddDate(-1, 0, 0)) || req.StartsAt.After(now.AddDate(1, 0, 0)) {
+		return req, time.Time{}, invalid("start time must be within a year of today")
+	}
+	return req, req.StartsAt.Add(duration), nil
 }
 
 // Validate checks and cleans a request against the business's rules.
 // It returns the cleaned request and the appointment's end time. The
 // database still has the final say on double booking (ErrSlotTaken).
 func Validate(req Request, loc *time.Location, hours []OpeningHours, duration time.Duration, countryCode string, now time.Time) (Request, time.Time, error) {
-	req.CustomerName = strings.Join(strings.Fields(req.CustomerName), " ")
-	if req.CustomerName == "" {
-		return req, time.Time{}, invalid("please enter your name")
-	}
-	if utf8.RuneCountInString(req.CustomerName) > 100 {
-		return req, time.Time{}, invalid("name is too long")
-	}
-	phone, err := NormalizePhone(req.CustomerPhone, countryCode)
+	req, err := cleanCustomer(req, countryCode)
 	if err != nil {
 		return req, time.Time{}, err
 	}
-	req.CustomerPhone = phone
 
 	if !req.StartsAt.After(now) {
 		return req, time.Time{}, invalid("that time is in the past")

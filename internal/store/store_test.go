@@ -24,12 +24,12 @@ func TestOverlapIsSlotTakenWithNoOrphanMessages(t *testing.T) {
 	start := time.Now().Add(48 * time.Hour).Truncate(time.Hour)
 	msgs := booking.PlanMessages(start, start.Add(time.Hour), time.Now(), true)
 	req := booking.Request{ServiceID: sv.ID, StartsAt: start, CustomerName: "A", CustomerPhone: "+447700900123", WhatsAppOptIn: true}
-	if _, _, err := s.CreateAppointment(ctx, b.ID, req, start.Add(time.Hour), msgs); err != nil {
+	if _, _, err := s.CreateAppointment(ctx, b.ID, req, start.Add(time.Hour), msgs, store.SourceOnline); err != nil {
 		t.Fatal(err)
 	}
 
 	req.StartsAt = start.Add(30 * time.Minute)
-	_, _, err = s.CreateAppointment(ctx, b.ID, req, req.StartsAt.Add(time.Hour), msgs)
+	_, _, err = s.CreateAppointment(ctx, b.ID, req, req.StartsAt.Add(time.Hour), msgs, store.SourceOnline)
 	if !errors.Is(err, booking.ErrSlotTaken) {
 		t.Fatalf("got %v, want ErrSlotTaken", err)
 	}

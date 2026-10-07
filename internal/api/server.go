@@ -72,6 +72,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/password/forgot", s.limit(s.authLimit, s.forgotPassword))
 	mux.Handle("POST /api/password/reset", s.limit(s.authLimit, s.resetPassword))
 	mux.HandleFunc("GET /api/config", s.getConfig)
+	mux.Handle("POST /api/email/verify", s.limit(s.authLimit, s.verifyEmail))
 	mux.HandleFunc("POST /api/stripe/webhook", s.stripeWebhook)
 
 	// Owner: every handler is scoped to the logged-in owner's business.
@@ -86,6 +87,14 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/owner/appointments/{id}/status", s.auth(s.setAppointmentStatus))
 	mux.Handle("GET /api/owner/appointments/{id}/messages", s.auth(s.listMessages))
 	mux.Handle("GET /api/owner/stats", s.auth(s.getStats))
+	mux.Handle("POST /api/owner/appointments", s.auth(s.createOwnerAppointment))
+	mux.Handle("POST /api/owner/appointments/{id}/reschedule", s.auth(s.rescheduleAppointment))
+	mux.Handle("GET /api/owner/time-off", s.auth(s.listTimeOff))
+	mux.Handle("POST /api/owner/time-off", s.auth(s.addTimeOff))
+	mux.Handle("DELETE /api/owner/time-off/{id}", s.auth(s.deleteTimeOff))
+	mux.Handle("POST /api/owner/email/resend", s.limit(s.authLimit, s.auth(s.resendVerification).ServeHTTP))
+	mux.Handle("PUT /api/owner/email", s.auth(s.changeEmail))
+	mux.Handle("GET /api/owner/export.csv", s.auth(s.exportCSV))
 	mux.Handle("PUT /api/owner/password", s.auth(s.changePassword))
 	mux.Handle("DELETE /api/owner/account", s.auth(s.deleteAccount))
 	mux.Handle("GET /api/owner/billing", s.auth(s.getBilling))

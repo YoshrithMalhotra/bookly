@@ -20,24 +20,30 @@ type AppointmentView struct {
 	EndsAt        time.Time      `json:"ends_at"`
 	Status        booking.Status `json:"status"`
 	WhatsAppOptIn bool           `json:"whatsapp_opt_in"`
+	Source        string         `json:"source"`
+	Notes         string         `json:"notes"`
 }
 
 const apptCols = `a.id, a.service_id, s.name, a.customer_name, a.customer_phone,
-	a.starts_at, a.ends_at, a.status, a.whatsapp_opt_in`
+	a.starts_at, a.ends_at, a.status, a.whatsapp_opt_in, a.source, a.notes`
 
 func scanAppt(row pgx.Row) (AppointmentView, error) {
 	var a AppointmentView
 	err := row.Scan(&a.ID, &a.ServiceID, &a.ServiceName, &a.CustomerName, &a.CustomerPhone,
-		&a.StartsAt, &a.EndsAt, &a.Status, &a.WhatsAppOptIn)
+		&a.StartsAt, &a.EndsAt, &a.Status, &a.WhatsAppOptIn, &a.Source, &a.Notes)
 	return a, err
 }
 
-// BusyIntervals returns non-cancelled appointments overlapping [from, to).
+// BusyIntervals returns non-cancelled appointments and time off
+// overlapping [from, to): the periods customers can't book.
 func (s *Store) BusyIntervals(ctx context.Context, businessID int64, from, to time.Time) ([]booking.Interval, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT starts_at, ends_at FROM appointments
 		WHERE business_id = $1 AND status <> 'cancelled'
-		  AND starts_at < $3 AND ends_at > $2`, businessID, from, to)
+		  AND starts_at < $3 AND ends_at > $2
+		UNION ALL
+		SELECT starts_at, ends_at FROM time_off
+		WHERE business_id = $1 AND starts_at < $3 AND ends_at > $2`, businessID, from, to)
 	if err != nil {
 		return nil, err
 	}
@@ -48,32 +54,105 @@ func (s *Store) BusyIntervals(ctx context.Context, businessID int64, from, to ti
 	})
 }
 
+const (
+	SourceOnline = "online" // booked by the customer
+	SourceOwner  = "owner"  // added by the owner; may overlap time off
+)
+
 // CreateAppointment inserts the appointment and its scheduled messages in
 // one transaction and returns its id and the customer's manage token. An
-// overlapping booking fails with booking.ErrSlotTaken and leaves nothing behind.
-func (s *Store) CreateAppointment(ctx context.Context, businessID int64, req booking.Request, endsAt time.Time, msgs []booking.PlannedMessage) (int64, string, error) {
+// overlapping booking fails with booking.ErrSlotTaken and leaves nothing
+// behind; so does an online booking during time off.
+func (s *Store) CreateAppointment(ctx context.Context, businessID int64, req booking.Request, endsAt time.Time, msgs []booking.PlannedMessage, source string) (int64, string, error) {
 	token := NewToken()
 	var id int64
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		if source == SourceOnline {
+			// FOR SHARE pairs with AddTimeOff's FOR UPDATE so a booking and
+			// new time off can't slip past each other.
+			if _, err := tx.Exec(ctx, `SELECT 1 FROM businesses WHERE id = $1 FOR SHARE`, businessID); err != nil {
+				return err
+			}
+			var blocked bool
+			if err := tx.QueryRow(ctx, `
+				SELECT EXISTS (SELECT 1 FROM time_off
+				               WHERE business_id = $1 AND starts_at < $3 AND ends_at > $2)`,
+				businessID, req.StartsAt, endsAt).Scan(&blocked); err != nil {
+				return err
+			}
+			if blocked {
+				return booking.ErrSlotTaken
+			}
+		}
 		err := tx.QueryRow(ctx, `
 			INSERT INTO appointments (business_id, service_id, customer_name, customer_phone,
-			                          starts_at, ends_at, whatsapp_opt_in, cancel_token)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+			                          starts_at, ends_at, whatsapp_opt_in, cancel_token, source, notes)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
 			businessID, req.ServiceID, req.CustomerName, req.CustomerPhone,
-			req.StartsAt, endsAt, req.WhatsAppOptIn, token).Scan(&id)
+			req.StartsAt, endsAt, req.WhatsAppOptIn, token, source, req.Notes).Scan(&id)
 		if err != nil {
 			return err
 		}
-		for _, m := range msgs {
-			if _, err := tx.Exec(ctx, `
-				INSERT INTO scheduled_messages (appointment_id, type, send_at) VALUES ($1, $2, $3)`,
-				id, string(m.Type), m.SendAt); err != nil {
-				return err
-			}
-		}
-		return nil
+		return upsertMessages(ctx, tx, id, msgs)
 	})
 	return id, token, mapErr(err)
+}
+
+// upsertMessages schedules msgs, replacing any earlier message of the same
+// type (after a reschedule the reminder goes out again for the new time).
+func upsertMessages(ctx context.Context, tx pgx.Tx, appointmentID int64, msgs []booking.PlannedMessage) error {
+	for _, m := range msgs {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO scheduled_messages (appointment_id, type, send_at) VALUES ($1, $2, $3)
+			ON CONFLICT (appointment_id, type) DO UPDATE
+			SET send_at = EXCLUDED.send_at, status = 'pending', attempts = 0, last_error = NULL, sent_at = NULL`,
+			appointmentID, string(m.Type), m.SendAt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Reschedule moves an upcoming appointment, keeping its service, and
+// re-plans its messages. Overlaps fail with booking.ErrSlotTaken.
+func (s *Store) Reschedule(ctx context.Context, businessID, id int64, startsAt time.Time, now time.Time) (AppointmentView, error) {
+	var a AppointmentView
+	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		var status booking.Status
+		var oldStart, oldEnd time.Time
+		var optIn bool
+		err := tx.QueryRow(ctx, `
+			SELECT status, starts_at, ends_at, whatsapp_opt_in FROM appointments
+			WHERE id = $1 AND business_id = $2 FOR UPDATE`, id, businessID).
+			Scan(&status, &oldStart, &oldEnd, &optIn)
+		if err != nil {
+			return err
+		}
+		if status != booking.StatusBooked && status != booking.StatusConfirmed {
+			return &booking.ValidationError{Msg: "only upcoming appointments can be moved"}
+		}
+		if !startsAt.After(now) {
+			return &booking.ValidationError{Msg: "the new time must be in the future"}
+		}
+		endsAt := startsAt.Add(oldEnd.Sub(oldStart))
+		if _, err := tx.Exec(ctx, `
+			UPDATE appointments SET starts_at = $2, ends_at = $3, status = 'booked' WHERE id = $1`,
+			id, startsAt, endsAt); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE scheduled_messages SET status = 'cancelled'
+			WHERE appointment_id = $1 AND status = 'pending'`, id); err != nil {
+			return err
+		}
+		if err := upsertMessages(ctx, tx, id, booking.PlanMessages(startsAt, endsAt, now, optIn)); err != nil {
+			return err
+		}
+		a, err = scanAppt(tx.QueryRow(ctx, `
+			SELECT `+apptCols+` FROM appointments a JOIN services s ON s.id = a.service_id WHERE a.id = $1`, id))
+		return err
+	})
+	return a, mapErr(err)
 }
 
 // AppointmentsBetween lists a business's appointments starting in [from, to).

@@ -2,6 +2,7 @@ package booking
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -270,5 +271,29 @@ func TestCanTransition(t *testing.T) {
 	}
 	if CanTransition(StatusCancelled, StatusBooked) || CanTransition(StatusDone, StatusCancelled) || CanTransition(StatusBooked, StatusBooked) {
 		t.Error("expected forbidden")
+	}
+}
+
+func TestValidateOwner(t *testing.T) {
+	now := time.Date(2026, 11, 2, 8, 0, 0, 0, time.UTC)
+	ok := Request{ServiceID: 1, StartsAt: now.Add(-2 * time.Hour).Add(7 * time.Minute), CustomerName: "Walk In", CustomerPhone: "+447700900123", Notes: "  fringe only "}
+	got, end, err := ValidateOwner(ok, 45*time.Minute, "", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Notes != "fringe only" || !end.Equal(ok.StartsAt.Add(45*time.Minute)) {
+		t.Errorf("got %+v, end %v", got, end)
+	}
+	for name, mod := range map[string]func(*Request){
+		"no start":  func(r *Request) { r.StartsAt = time.Time{} },
+		"too old":   func(r *Request) { r.StartsAt = now.AddDate(-2, 0, 0) },
+		"long note": func(r *Request) { r.Notes = strings.Repeat("x", MaxNotes+1) },
+		"bad phone": func(r *Request) { r.CustomerPhone = "123" },
+	} {
+		r := ok
+		mod(&r)
+		if _, _, err := ValidateOwner(r, time.Hour, "", now); err == nil {
+			t.Errorf("%s: expected error", name)
+		}
 	}
 }

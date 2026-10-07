@@ -133,10 +133,16 @@ func (s *Server) signup(w http.ResponseWriter, r *http.Request) {
 		handleErr(w, r, err)
 		return
 	}
-	s.sendEmail(b.OwnerEmail, "Welcome to "+s.cfg.CompanyName, fmt.Sprintf(
-		"Hi,\n\n%s is set up. Your booking link is:\n%s/b/%s\n\n"+
+	_, token, err := s.store.CreateEmailVerification(r.Context(), b.ID)
+	if err != nil {
+		handleErr(w, r, err)
+		return
+	}
+	s.sendEmail(b.OwnerEmail, "Welcome to "+s.cfg.CompanyName+" – please confirm your email", fmt.Sprintf(
+		"Hi,\n\n%s is set up. Please confirm this is your email address:\n%s/verify/%s\n\n"+
+			"Your booking link is:\n%s/b/%s\n\n"+
 			"Next: add your services and opening hours at %s/owner\n",
-		b.Name, s.cfg.PublicURL, b.Slug, s.cfg.PublicURL))
+		b.Name, s.cfg.PublicURL, token, s.cfg.PublicURL, b.Slug, s.cfg.PublicURL))
 	writeJSON(w, http.StatusCreated, b)
 }
 
@@ -210,7 +216,10 @@ type businessUpdate struct {
 	Name            string `json:"name"`
 	Timezone        string `json:"timezone"`
 	GoogleReviewURL string `json:"google_review_url"`
+	Currency        string `json:"currency"`
 }
+
+var currencyRe = regexp.MustCompile(`^[A-Z]{3}$`)
 
 func (s *Server) updateBusiness(w http.ResponseWriter, r *http.Request) {
 	var in businessUpdate
@@ -235,7 +244,20 @@ func (s *Server) updateBusiness(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	b, err := s.store.UpdateBusiness(r.Context(), businessID(r), name, in.Timezone, review)
+	currency := strings.ToUpper(strings.TrimSpace(in.Currency))
+	if currency == "" { // not sent: keep the current one
+		cur, err := s.store.BusinessByID(r.Context(), businessID(r))
+		if err != nil {
+			handleErr(w, r, err)
+			return
+		}
+		currency = cur.Currency
+	}
+	if !currencyRe.MatchString(currency) {
+		handleErr(w, r, invalid("currency must be a 3-letter code like GBP, EUR, USD or INR"))
+		return
+	}
+	b, err := s.store.UpdateBusiness(r.Context(), businessID(r), name, in.Timezone, review, currency)
 	if err != nil {
 		handleErr(w, r, err)
 		return

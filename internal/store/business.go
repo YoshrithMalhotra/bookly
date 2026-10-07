@@ -26,6 +26,8 @@ type Business struct {
 	CurrentPeriodEnd     *time.Time `json:"current_period_end"`
 	StripeCustomerID     string     `json:"-"`
 	StripeSubscriptionID string     `json:"-"`
+	Currency             string     `json:"currency"`
+	EmailVerified        bool       `json:"email_verified"`
 }
 
 type Service struct {
@@ -38,12 +40,14 @@ type Service struct {
 
 const businessCols = `id, name, slug, timezone, coalesce(google_review_url, ''), owner_email, created_at,
 	subscription_status, trial_ends_at, current_period_end,
-	coalesce(stripe_customer_id, ''), coalesce(stripe_subscription_id, '')`
+	coalesce(stripe_customer_id, ''), coalesce(stripe_subscription_id, ''),
+	currency, email_verified_at IS NOT NULL`
 
 func scanBusiness(row pgx.Row) (Business, error) {
 	var b Business
 	err := row.Scan(&b.ID, &b.Name, &b.Slug, &b.Timezone, &b.GoogleReviewURL, &b.OwnerEmail, &b.CreatedAt,
-		&b.SubscriptionStatus, &b.TrialEndsAt, &b.CurrentPeriodEnd, &b.StripeCustomerID, &b.StripeSubscriptionID)
+		&b.SubscriptionStatus, &b.TrialEndsAt, &b.CurrentPeriodEnd, &b.StripeCustomerID, &b.StripeSubscriptionID,
+		&b.Currency, &b.EmailVerified)
 	return b, mapErr(err)
 }
 
@@ -89,12 +93,6 @@ func (s *Store) CreateBusiness(ctx context.Context, nb NewBusiness) (Business, e
 		return err
 	})
 	return b, mapErr(err)
-}
-
-func (s *Store) UpdateBusiness(ctx context.Context, id int64, name, timezone, reviewURL string) (Business, error) {
-	return scanBusiness(s.pool.QueryRow(ctx, `
-		UPDATE businesses SET name = $2, timezone = $3, google_review_url = nullif($4, '')
-		WHERE id = $1 RETURNING `+businessCols, id, name, timezone, reviewURL))
 }
 
 // Services lists a business's services; activeOnly hides retired ones.

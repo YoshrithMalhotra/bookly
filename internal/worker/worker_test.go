@@ -60,7 +60,7 @@ func book(t *testing.T, s *store.Store, businessID, serviceID int64, i int, star
 	id, _, err := s.CreateAppointment(context.Background(), businessID, booking.Request{
 		ServiceID: serviceID, StartsAt: start, CustomerName: "C",
 		CustomerPhone: "+4477009001" + string(rune('0'+i/10)) + string(rune('0'+i%10)), WhatsAppOptIn: true,
-	}, start.Add(30*time.Minute), []booking.PlannedMessage{{Type: booking.MessageReminder, SendAt: time.Now().Add(-time.Minute)}})
+	}, start.Add(30*time.Minute), []booking.PlannedMessage{{Type: booking.MessageReminder, SendAt: time.Now().Add(-time.Minute)}}, store.SourceOnline)
 	if err != nil {
 		t.Fatal(err)
 	}
